@@ -199,6 +199,51 @@ export const QueryBar: React.FunctionComponent<QueryBarProps> = ({
   const [isNoqlMode, setIsNoqlMode] = useState(true);
   const [noqlQuery, setNoqlQuery] = useState('');
 
+  // Utility function to recursively process query objects and replace Date objects with ISODate strings
+  const processQueryForDates = useCallback((obj: any): any => {
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+
+    if (obj instanceof Date) {
+      // Convert to ISO string and replace 'Z' with '+00:00' to match expected format
+      const dateString = obj.toISOString().replace('Z', '+00:00');
+      return `ISODate('${dateString}')`;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map((item) => processQueryForDates(item));
+    }
+
+    if (typeof obj === 'object') {
+      const processed: Record<string, any> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        processed[key] = processQueryForDates(value);
+      }
+      return processed;
+    }
+
+    return obj;
+  }, []);
+
+  // Custom JSON stringifier that handles ISODate strings properly
+  const stringifyWithISODate = useCallback((obj: any): string => {
+    return JSON.stringify(obj, (key, value) => {
+      if (
+        typeof value === 'string' &&
+        value.startsWith('ISODate(') &&
+        value.endsWith(')')
+      ) {
+        // Return a special marker that we'll replace after JSON.stringify
+        return `__ISODATE_MARKER__${value}__ISODATE_MARKER__`;
+      }
+      return value;
+    }).replace(
+      /"__ISODATE_MARKER__(ISODate\([^)]+\))__ISODATE_MARKER__"/g,
+      '$1'
+    );
+  }, []);
+
   const handleNoqlRun = useCallback(() => {
     const result = SQLParser.parseSQL(noqlQuery, {});
 
@@ -206,7 +251,7 @@ export const QueryBar: React.FunctionComponent<QueryBarProps> = ({
       // Convert the NOQL result to a MongoDB query format
       console.log({ result });
       const mongoQuery = {
-        filter: result.query || {},
+        filter: processQueryForDates(result.query) || {},
         project: result.projection
           ? Object.keys(result.projection).reduce(
               (acc: Record<string, number>, key) => {
@@ -224,13 +269,27 @@ export const QueryBar: React.FunctionComponent<QueryBarProps> = ({
       // Update the query bar state with the MongoDB query
       Object.entries(mongoQuery).forEach(([field, value]) => {
         if (value !== undefined) {
-          dispatch(changeField(field as QueryProperty, JSON.stringify(value)));
+          if (field === 'filter') {
+            dispatch(
+              changeField(field as QueryProperty, stringifyWithISODate(value))
+            );
+          } else {
+            dispatch(
+              changeField(field as QueryProperty, JSON.stringify(value))
+            );
+          }
         }
       });
 
       onApply();
     }
-  }, [noqlQuery, onApply, dispatch]);
+  }, [
+    noqlQuery,
+    onApply,
+    dispatch,
+    processQueryForDates,
+    stringifyWithISODate,
+  ]);
 
   const onFormSubmit = useCallback(
     (evt: React.FormEvent) => {
