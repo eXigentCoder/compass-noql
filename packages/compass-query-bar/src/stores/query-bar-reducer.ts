@@ -101,6 +101,7 @@ export const changeField = (
   stringValue: string
 ): QueryBarThunkAction<void, ChangeFieldAction> => {
   return (dispatch, getState, { preferences }) => {
+    console.log({ name, stringValue });
     const parsedValue = validateField(name, stringValue, {
       maxTimeMS: preferences.getPreferences().maxTimeMS ?? undefined,
     });

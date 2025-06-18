@@ -1,4 +1,5 @@
-import React, { useCallback, useMemo } from 'react';
+import type { ChangeEvent } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Button,
   Icon,
@@ -8,14 +9,18 @@ import {
   spacing,
   palette,
   useDarkMode,
+  Toggle,
+  TextArea,
 } from '@mongodb-js/compass-components';
 import {
   AIExperienceEntry,
   createAIPlaceholderHTMLPlaceholder,
 } from '@mongodb-js/compass-generative-ai';
-import { connect } from '../stores/context';
+import { connect, useDispatch } from '../stores/context';
 import { useIsAIFeatureEnabled } from 'compass-preferences-model/provider';
 import { useTelemetry } from '@mongodb-js/compass-telemetry/provider';
+import type { NoqlResult } from '@synatic/noql';
+import SQLParser from '@synatic/noql';
 
 import {
   OPTION_DEFINITION,
@@ -29,6 +34,7 @@ import {
   openExportToLanguage,
   resetQuery,
   explainQuery,
+  changeField,
 } from '../stores/query-bar-reducer';
 import { toggleQueryOptions } from '../stores/query-bar-reducer';
 import { isEqualDefaultQuery, isQueryValid } from '../utils/query';
@@ -89,6 +95,35 @@ const queryOptionsContainerStyles = css({
   marginTop: spacing[200],
   padding: `0 ${spacing[200]}px`,
   gap: spacing[200],
+});
+
+const noqlContainerStyles = css({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: spacing[200],
+  padding: spacing[200],
+  background: palette.white,
+  border: `1px solid ${palette.gray.light2}`,
+  borderRadius: '6px',
+  width: '100%',
+});
+
+const noqlTextAreaStyles = css({
+  width: '100%',
+  minHeight: '100px',
+  resize: 'vertical',
+});
+
+const noqlButtonContainerStyles = css({
+  display: 'flex',
+  justifyContent: 'flex-end',
+});
+
+const toggleContainerStyles = css({
+  display: 'flex',
+  alignItems: 'center',
+  gap: spacing[200],
+  marginBottom: spacing[200],
 });
 
 const QueryOptionsToggle = connect(
@@ -160,6 +195,42 @@ export const QueryBar: React.FunctionComponent<QueryBarProps> = ({
   const darkMode = useDarkMode();
   const isAIFeatureEnabled = useIsAIFeatureEnabled();
   const track = useTelemetry();
+  const dispatch = useDispatch();
+  const [isNoqlMode, setIsNoqlMode] = useState(true);
+  const [noqlQuery, setNoqlQuery] = useState('');
+
+  const handleNoqlRun = useCallback(() => {
+    const result = SQLParser.parseSQL(noqlQuery, {});
+
+    if (result.type === 'query') {
+      // Convert the NOQL result to a MongoDB query format
+      console.log({ result });
+      const mongoQuery = {
+        filter: result.query || {},
+        project: result.projection
+          ? Object.keys(result.projection).reduce(
+              (acc: Record<string, number>, key) => {
+                acc[key] = 1;
+                return acc;
+              },
+              {}
+            )
+          : {},
+        limit: result.limit,
+        skip: result.skip,
+        sort: result.sort,
+      };
+      console.log({ mongoQuery });
+      // Update the query bar state with the MongoDB query
+      Object.entries(mongoQuery).forEach(([field, value]) => {
+        if (value !== undefined) {
+          dispatch(changeField(field as QueryProperty, JSON.stringify(value)));
+        }
+      });
+
+      onApply();
+    }
+  }, [noqlQuery, onApply, dispatch]);
 
   const onFormSubmit = useCallback(
     (evt: React.FormEvent) => {
@@ -206,116 +277,157 @@ export const QueryBar: React.FunctionComponent<QueryBarProps> = ({
     favoriteQueryStorageAvailable && recentQueryStorageAvailable;
 
   return (
-    <form
-      className={cx(queryBarFormStyles, darkMode && queryBarFormDarkStyles)}
-      data-testid="query-bar"
-      onSubmit={onFormSubmit}
-      noValidate
-      data-result-id={resultId}
-      data-apply-id={applyId}
-    >
-      {isAIFeatureEnabled && (
-        <QueryAI
-          onClose={() => {
-            onHideAIInputClick?.();
-          }}
-          show={isAIInputVisible}
+    <>
+      <div className={toggleContainerStyles}>
+        <Toggle
+          id="noql-mode-toggle"
+          aria-label="Toggle NOQL mode"
+          size="small"
+          onChange={() => setIsNoqlMode(!isNoqlMode)}
+          checked={isNoqlMode}
         />
-      )}
-      <div className={queryBarFirstRowStyles}>
-        {enableSavedAggregationsQueries && <QueryHistoryButtonPopover />}
-        <div className={filterContainerStyles}>
-          <QueryOptionComponent
-            name="filter"
-            id={filterQueryOptionId}
-            onApply={onApply}
-            placeholder={filterPlaceholder}
-            disabled={isAIFetching}
-          />
-          {showAIEntryButton && (
-            <div className={aiEntryContainerStyles}>
-              <AIExperienceEntry
-                data-testid="ai-experience-query-entry-button"
-                onClick={onShowAIInputClick}
-                type="query"
-              />
-            </div>
-          )}
-        </div>
-        {showExplainButton && (
-          <Button
-            aria-label="Explain query"
-            title="View the execution plan for the current query"
-            data-testid="query-bar-explain-button"
-            onClick={onExplain}
-            disabled={!isQueryValid || isAIFetching}
-            size="small"
-            type="button"
-          >
-            Explain
-          </Button>
-        )}
-        <Button
-          aria-label="Reset query"
-          data-testid="query-bar-reset-filter-button"
-          onClick={onReset}
-          disabled={!queryChanged || isAIFetching}
-          size="small"
-          type="button"
-        >
-          Reset
-        </Button>
-        <Button
-          data-testid="query-bar-apply-filter-button"
-          disabled={!isQueryValid || isAIFetching}
-          variant="primary"
-          size="small"
-          type="submit"
-          onClick={onFormSubmit}
-        >
-          {buttonLabel}
-        </Button>
-        {showExportToLanguageButton && (
-          <Button
-            onClick={onOpenExportToLanguage}
-            title="Open export to language"
-            aria-label="Open export to language"
-            data-testid="query-bar-open-export-to-language-button"
-            disabled={isAIFetching}
-            type="button"
-            size="small"
-          >
-            <Icon glyph="Code" />
-          </Button>
-        )}
-        {queryOptionsLayout && queryOptionsLayout.length > 0 && (
-          <div>
-            <QueryOptionsToggle
-              aria-controls="additional-query-options-container"
-              data-testid="query-bar-options-toggle"
-            />
-          </div>
-        )}
+        <label htmlFor="noql-mode-toggle">NOQL Mode</label>
       </div>
-      {isQueryOptionsExpanded &&
-        queryOptionsLayout &&
-        queryOptionsLayout.length > 0 && (
-          <div
-            className={queryOptionsContainerStyles}
-            id="additional-query-options-container"
-          >
-            {queryOptionsLayout.map((queryOptionRowLayout, rowIndex) => (
-              <QueryBarRow
-                queryOptionsLayout={queryOptionRowLayout}
-                key={`query-bar-row-${rowIndex}`}
-                onApply={onApply}
-                disabled={isAIFetching}
-                placeholders={placeholders}
-              />
-            ))}
+      {isNoqlMode ? (
+        <div
+          className={cx(
+            noqlContainerStyles,
+            darkMode && queryBarFormDarkStyles
+          )}
+        >
+          <TextArea
+            className={noqlTextAreaStyles}
+            placeholder="Enter your NOQL query here..."
+            value={noqlQuery}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
+              setNoqlQuery(e.target.value)
+            }
+            data-testid="noql-textarea"
+          />
+          <div className={noqlButtonContainerStyles}>
+            <Button
+              variant="primary"
+              size="small"
+              onClick={handleNoqlRun}
+              data-testid="noql-run-button"
+            >
+              Run NOQL.
+            </Button>
           </div>
-        )}
-    </form>
+        </div>
+      ) : (
+        <form
+          className={cx(queryBarFormStyles, darkMode && queryBarFormDarkStyles)}
+          data-testid="query-bar"
+          onSubmit={onFormSubmit}
+          noValidate
+          data-result-id={resultId}
+          data-apply-id={applyId}
+        >
+          {isAIFeatureEnabled && (
+            <QueryAI
+              onClose={() => {
+                onHideAIInputClick?.();
+              }}
+              show={isAIInputVisible}
+            />
+          )}
+          <div className={queryBarFirstRowStyles}>
+            {enableSavedAggregationsQueries && <QueryHistoryButtonPopover />}
+            <div className={filterContainerStyles}>
+              <QueryOptionComponent
+                name="filter"
+                id={filterQueryOptionId}
+                onApply={onApply}
+                placeholder={filterPlaceholder}
+                disabled={isAIFetching}
+              />
+              {showAIEntryButton && (
+                <div className={aiEntryContainerStyles}>
+                  <AIExperienceEntry
+                    data-testid="ai-experience-query-entry-button"
+                    onClick={onShowAIInputClick}
+                    type="query"
+                  />
+                </div>
+              )}
+            </div>
+            {showExplainButton && (
+              <Button
+                aria-label="Explain query"
+                title="View the execution plan for the current query"
+                data-testid="query-bar-explain-button"
+                onClick={onExplain}
+                disabled={!isQueryValid || isAIFetching}
+                size="small"
+                type="button"
+              >
+                Explain
+              </Button>
+            )}
+            <Button
+              aria-label="Reset query"
+              data-testid="query-bar-reset-filter-button"
+              onClick={onReset}
+              disabled={!queryChanged || isAIFetching}
+              size="small"
+              type="button"
+            >
+              Reset
+            </Button>
+            <Button
+              data-testid="query-bar-apply-filter-button"
+              disabled={!isQueryValid || isAIFetching}
+              variant="primary"
+              size="small"
+              type="submit"
+              onClick={onFormSubmit}
+            >
+              {buttonLabel}
+            </Button>
+            {showExportToLanguageButton && (
+              <Button
+                onClick={onOpenExportToLanguage}
+                title="Open export to language"
+                aria-label="Open export to language"
+                data-testid="query-bar-open-export-to-language-button"
+                disabled={isAIFetching}
+                type="button"
+                size="small"
+              >
+                <Icon glyph="Code" />
+              </Button>
+            )}
+            {queryOptionsLayout && queryOptionsLayout.length > 0 && (
+              <div>
+                <QueryOptionsToggle
+                  aria-controls="additional-query-options-container"
+                  data-testid="query-bar-options-toggle"
+                />
+              </div>
+            )}
+          </div>
+          {isQueryOptionsExpanded &&
+            queryOptionsLayout &&
+            queryOptionsLayout.length > 0 && (
+              <div
+                className={queryOptionsContainerStyles}
+                id="additional-query-options-container"
+              >
+                {queryOptionsLayout.map((queryOptionRowLayout, rowIndex) => (
+                  <QueryBarRow
+                    queryOptionsLayout={queryOptionRowLayout}
+                    key={`query-bar-row-${rowIndex}`}
+                    onApply={onApply}
+                    disabled={isAIFetching}
+                    placeholders={placeholders}
+                  />
+                ))}
+              </div>
+            )}
+        </form>
+      )}
+    </>
   );
 };
 
